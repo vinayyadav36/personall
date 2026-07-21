@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Financial Transaction Visualizer</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+    <header class="top-bar">
+        <h1>Financial Transaction Visualizer</h1>
+        <div class="controls">
+            <div class="search-filter">
+                <input type="text" id="global-search" placeholder="Search Account, UTR, Amount...">
+                <button id="filter-btn">Filter</button>
+            </div>
+            <div class="toggles">
+                <label>
+                    <input type="checkbox" id="toggle-primary-entity" checked>
+                    Show Primary Entity Column
+                </label>
+                <label>
+                    <input type="checkbox" id="toggle-layout">
+                    Swimlane Layout (Graph)
+                </label>
+            </div>
+        </div>
+    </header>
+
+    <div id="upload-overlay" class="upload-overlay active">
+        <div class="upload-box" id="drop-zone">
+            <h2>Upload Financial Data</h2>
+            <p>Drag and drop your Excel (.xlsx) file here</p>
+            <p>or</p>
+            <input type="file" id="file-input" accept=".xlsx" style="display: none;">
+            <button onclick="document.getElementById('file-input').click()">Browse Files</button>
+            <p class="privacy-note">🔒 100% Local Processing — No data uploaded to any server</p>
+        </div>
+    </div>
+
+    <div class="dashboard" id="dashboard" style="display: none;">
+
+        <div class="summary-cards" id="summary-cards">
+            <div class="card">
+                <h3>Total Layers</h3>
+                <p id="stat-layers">0</p>
+            </div>
+            <div class="card">
+                <h3>Total Entities</h3>
+                <p id="stat-entities">0</p>
+            </div>
+            <div class="card">
+                <h3>Total Transactions</h3>
+                <p id="stat-txns">0</p>
+            </div>
+            <div class="card">
+                <h3>Total Amount Moved</h3>
+                <p id="stat-amount">0.00</p>
+            </div>
+        </div>
+
+        <div class="main-layout">
+            <aside class="sidebar">
+                <h3>Layers</h3>
+                <ul id="layer-navigator" class="layer-list">
+                    <!-- Layer items generated dynamically -->
+                </ul>
+            </aside>
+
+            <main class="content-area">
+                <div class="view-tabs">
+                    <button class="tab-btn active" data-target="table-view">Table View</button>
+                    <button class="tab-btn" data-target="graph-view">Mind Map View</button>
+                </div>
+
+                <div id="table-view" class="view-panel active">
+                    <div id="table-container">
+                        <!-- Tables generated dynamically -->
+                    </div>
+                </div>
+
+                <div id="graph-view" class="view-panel">
+                    <div id="cy"></div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <footer class="footer">
+        <p>🔒 100% Local Processing — No data uploaded to any server.</p>
+    </footer>
+
+    <!-- Libraries -->
+    <script src="libs/xlsx.full.min.js"></script>
+    <script src="libs/cytoscape.min.js"></script>
+
+    <!-- Application Logic -->
+    <script src="js/app.js"></script>
+    <script src="js/table.js"></script>
+    <script src="js/mindmap.js"></script>
+
+</body>
+</html>
