@@ -71,13 +71,41 @@ window.initMindMap = function() {
     // Interaction: show details on click
     cy.on('tap', 'node', function(evt){
         const node = evt.target;
-        // In a real scenario, this would open a side panel or modal
-        console.log("Clicked Node:", node.data());
-        // E.g., switch to table view and filter by this entity
         if (node.data('type') === 'entity') {
             document.getElementById('global-search').value = node.data('id');
             document.getElementById('filter-btn').click();
             document.querySelector('.tab-btn[data-target="table-view"]').click();
+        }
+    });
+
+    // Handle Layer Highlighting
+    document.getElementById('layer-navigator').addEventListener('click', (e) => {
+        const li = e.target.closest('li');
+        if (!li) return;
+
+        // Extract layer key from the text (ignoring the span)
+        const layerKey = li.childNodes[0].textContent.trim();
+
+        // Un-dim all edges and nodes first
+        cy.elements().removeClass('dimmed');
+        cy.elements().style({
+            'opacity': 1,
+            'overlay-opacity': 0
+        });
+
+        if (layerKey) {
+            // Find nodes matching this layer (either explicitly or via the string 'Unclassified Data')
+            const selectedNodes = cy.nodes().filter(n => {
+                const nodeLayerIdx = n.data('layer');
+                const expectedIdx = window.appState.layers.indexOf(layerKey) + 1;
+                // Since "Unclassified Data" might be layer index length, we just match by layer index
+                return nodeLayerIdx === expectedIdx || layerKey === "Unclassified Data" && n.data('layerStr') === "Unclassified Data";
+            });
+
+            // Dim others
+            if (selectedNodes.length > 0) {
+                cy.elements().not(selectedNodes).not(selectedNodes.connectedEdges()).style('opacity', 0.2);
+            }
         }
     });
 
@@ -110,7 +138,8 @@ function generateGraphElements() {
                         id: cleanEntityId,
                         label: cleanEntityId,
                         type: 'entity',
-                        layer: layerIndex + 1 // Used for concentric layout
+                        layer: layerIndex + 1, // Used for concentric layout
+                        layerStr: layerKey
                     }
                 });
                 addedNodes.add(cleanEntityId);
@@ -139,7 +168,8 @@ function generateGraphElements() {
                                         id: receiverId,
                                         label: receiverId,
                                         type: 'entity',
-                                        layer: layerIndex + 2 // Assuming it moves to next layer
+                                        layer: layerIndex + 2, // Assuming it moves to next layer
+                                        layerStr: layerKey
                                     }
                                 });
                                 addedNodes.add(receiverId);
@@ -162,7 +192,8 @@ function generateGraphElements() {
                                 id: termId,
                                 label: getShortLabel(sheetName),
                                 type: 'terminal',
-                                layer: layerIndex + 1
+                                layer: layerIndex + 1,
+                                layerStr: layerKey
                             }
                         });
                         elements.edges.push({

@@ -11,6 +11,7 @@
     <header class="top-bar">
         <h1>Financial Transaction Visualizer</h1>
         <div class="controls">
+            <button id="export-word-btn" class="export-btn" style="display: none;">Export to Word</button>
             <div class="search-filter">
                 <input type="text" id="global-search" placeholder="Search Account, UTR, Amount...">
                 <button id="filter-btn">Filter</button>
@@ -28,6 +29,12 @@
         </div>
     </header>
 
+    <!-- Global Loading Overlay -->
+    <div id="global-loading-overlay" class="loading-overlay" style="display: none;">
+        <div class="spinner"></div>
+        <p>Processing Workbook...</p>
+    </div>
+
     <div id="upload-overlay" class="upload-overlay active">
         <div class="upload-box" id="drop-zone">
             <h2>Upload Financial Data</h2>
@@ -35,6 +42,10 @@
             <p>or</p>
             <input type="file" id="file-input" accept=".xlsx" style="display: none;">
             <button onclick="document.getElementById('file-input').click()">Browse Files</button>
+            <div id="local-loading" style="display: none; margin-top: 15px;">
+                <div class="spinner-small"></div>
+                <span>Parsing Excel file...</span>
+            </div>
             <p class="privacy-note">🔒 100% Local Processing — No data uploaded to any server</p>
         </div>
     </div>
@@ -87,18 +98,68 @@
         </div>
     </div>
 
+    <!-- Export Modal -->
+    <div id="export-modal" class="modal-overlay" style="display: none;" role="dialog" aria-modal="true">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Export to Word</h2>
+                <button id="close-export-modal" aria-label="Close modal">&times;</button>
+            </div>
+
+            <div class="modal-body">
+                <div class="export-controls">
+                    <div class="presets-section">
+                        <h3>Presets</h3>
+                        <div class="preset-buttons">
+                            <button class="preset-btn" data-preset="all">All Data</button>
+                            <button class="preset-btn" data-preset="summary">Investigation Summary</button>
+                            <button class="preset-btn" data-preset="custom">Custom Selection</button>
+                        </div>
+                    </div>
+
+                    <div class="search-section">
+                        <input type="text" id="export-column-search" placeholder="Search columns..." aria-label="Search columns">
+                    </div>
+                </div>
+
+                <div class="modal-global-toggles">
+                    <label><input type="checkbox" id="export-select-all" checked> Select All / None</label>
+                </div>
+
+                <div id="export-sheets-container" class="export-sheets-container">
+                    <!-- Sheet groups rendered dynamically -->
+                </div>
+            </div>
+
+            <div class="modal-footer">
+                <div class="export-summary" id="export-summary" aria-live="polite">
+                    0 sheets selected, 0 columns selected, 0 total data rows to be exported.
+                </div>
+                <div class="export-actions">
+                    <div id="export-loading" class="export-loading" style="display: none;">
+                        <div class="spinner-small"></div> Generating Document...
+                    </div>
+                    <p id="export-warning" class="warning-text" style="display: none;">No columns selected</p>
+                    <button id="generate-word-btn" class="primary-btn">Generate Word File</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <footer class="footer">
-        <p>🔒 100% Local Processing — No data uploaded to any server.</p>
+        <p>🔒 100% Local Processing — No data leaves your browser.</p>
     </footer>
 
     <!-- Libraries -->
     <script src="libs/xlsx.full.min.js"></script>
     <script src="libs/cytoscape.min.js"></script>
+    <script src="libs/docx.js"></script>
 
     <!-- Application Logic -->
     <script src="js/app.js"></script>
     <script src="js/table.js"></script>
     <script src="js/mindmap.js"></script>
+    <script src="js/export.js"></script>
 
 </body>
 </html>

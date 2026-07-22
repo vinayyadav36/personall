@@ -53,18 +53,29 @@ function handleFile(file) {
         return;
     }
 
-    const reader = new FileReader();
-    reader.onload = (e) => {
-        try {
-            const data = new Uint8Array(e.target.result);
-            const workbook = XLSX.read(data, { type: "array" });
-            processWorkbook(workbook);
-        } catch (error) {
-            console.error("Error reading Excel file:", error);
-            alert("Error parsing the Excel file. See console for details.");
-        }
-    };
-    reader.readAsArrayBuffer(file);
+    // Show loaders
+    const localLoading = document.getElementById('local-loading');
+    const globalLoading = document.getElementById('global-loading-overlay');
+    if (localLoading) localLoading.style.display = 'block';
+    if (globalLoading) globalLoading.style.display = 'flex';
+
+    // Allow UI to update before blocking main thread
+    setTimeout(() => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            try {
+                const data = new Uint8Array(e.target.result);
+                const workbook = XLSX.read(data, { type: "array" });
+                processWorkbook(workbook);
+            } catch (error) {
+                console.error("Error reading Excel file:", error);
+                alert("Error parsing the Excel file. See console for details.");
+                if (localLoading) localLoading.style.display = 'none';
+                if (globalLoading) globalLoading.style.display = 'none';
+            }
+        };
+        reader.readAsArrayBuffer(file);
+    }, 100);
 }
 
 function processWorkbook(workbook) {
@@ -142,13 +153,23 @@ function structureData() {
         const amountCol = getColumnNameByPattern(headers, amountPatterns);
 
         rows.forEach(row => {
-            const layerVal = layerCol ? row[layerCol] : "Unknown Layer";
-            const entityVal = entityCol ? row[entityCol] : "Unknown Entity";
+            let isUnclassified = false;
+            let layerVal = layerCol ? row[layerCol] : null;
+            let entityVal = entityCol ? row[entityCol] : null;
+
+            if (!layerVal || !entityVal) {
+                isUnclassified = true;
+                layerVal = "Unclassified Data";
+                entityVal = "Unclassified Entity";
+            }
 
             // Clean layer name for sorting (e.g., "Layer 1" -> 1)
-            const layerMatch = String(layerVal).match(/\d+/);
-            const layerNum = layerMatch ? parseInt(layerMatch[0]) : 999;
-            const layerKey = `Layer ${layerNum}`;
+            let layerKey = layerVal;
+            if (!isUnclassified) {
+                const layerMatch = String(layerVal).match(/\d+/);
+                const layerNum = layerMatch ? parseInt(layerMatch[0]) : 999;
+                layerKey = `Layer ${layerNum}`;
+            }
 
             if (!structured[layerKey]) {
                 structured[layerKey] = {};
@@ -177,6 +198,9 @@ function structureData() {
 
     // Sort layers
     window.appState.layers = Object.keys(structured).sort((a, b) => {
+        if (a === "Unclassified Data") return 1; // Put unclassified at the end
+        if (b === "Unclassified Data") return -1;
+
         const numA = parseInt(a.match(/\d+/)?.[0] || 999);
         const numB = parseInt(b.match(/\d+/)?.[0] || 999);
         return numA - numB;
@@ -193,6 +217,16 @@ function structureData() {
 function updateDashboardUI() {
     document.getElementById("upload-overlay").classList.add("hidden");
     document.getElementById("dashboard").style.display = "flex";
+
+    // Hide loaders
+    const localLoading = document.getElementById('local-loading');
+    const globalLoading = document.getElementById('global-loading-overlay');
+    if (localLoading) localLoading.style.display = 'none';
+    if (globalLoading) globalLoading.style.display = 'none';
+
+    // Show Export button
+    const exportBtn = document.getElementById("export-word-btn");
+    if (exportBtn) exportBtn.style.display = "inline-block";
 
     // Update stats
     document.getElementById("stat-layers").innerText = window.appState.stats.layers;
