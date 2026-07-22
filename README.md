@@ -5,7 +5,7 @@ It processes data completely in the browser — no backend, no server, and no in
 
 ## Setup Instructions
 
-To run this application locally without internet access, you need to download two JavaScript libraries and place them in the `/libs/` folder.
+To run this application locally without internet access, you need to download three JavaScript libraries and place them in the `/libs/` folder.
 
 1. **SheetJS**
    - Download the latest stable version of `xlsx.full.min.js`.
@@ -17,7 +17,12 @@ To run this application locally without internet access, you need to download tw
    - You can get it from their CDN or GitHub. For example: `https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.28.1/cytoscape.min.js`
    - Save the file as `libs/cytoscape.min.js`.
 
-After placing these two files in the `libs` folder, simply open `index.html` in your web browser (double-click the file) to start using the application.
+3. **docx** (For Word Export functionality)
+   - Download the latest stable standalone browser build of `index.js` from the `docx` package.
+   - You can get it from unpkg. For example: `https://unpkg.com/docx/build/index.js`
+   - Save the file as `libs/docx.js` (Note the renamed file).
+
+After placing these three files in the `libs` folder, simply open `index.html` in your web browser (double-click the file) to start using the application.
 
 ## Features
 
@@ -26,7 +31,16 @@ After placing these two files in the `libs` folder, simply open `index.html` in 
 - **Cross-Reference:** Links entities and transaction flows automatically between layers.
 - **Table and Mind Map Views:** Explore the data either in a detailed, sortable table or visually via an interactive concentric mind map.
 - **Filtering & Search:** Easily filter by specific transaction criteria (amount, date, UTR, account).
+- **Export to Word:** Generate fully customized `.docx` files completely in the browser. Select exact sheets and columns you wish to include in your reports using the advanced column-picker interface with Presets.
 - **Themes:** Light theme for clarity and professional forensic analysis.
+
+## Using the Word Export Feature
+1. Upload your `.xlsx` transaction file.
+2. Once the dashboard loads, click the **Export to Word** button at the top.
+3. In the modal, use **Presets** (All Data, Investigation Summary, Custom Selection) to quickly select the most important columns.
+4. Expand sheets and check/uncheck exact columns using the column-picker.
+5. See the live summary at the bottom update dynamically.
+6. Click **Generate Word File** to immediately construct and download the `.docx` document locally without sending your data anywhere.
 
 ## Development
 
