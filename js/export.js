@@ -4,6 +4,8 @@ window.exportState = {
     isGenerating: false
 };
 
+const yieldToMainThread = () => new Promise(resolve => setTimeout(resolve, 0));
+
 document.addEventListener("DOMContentLoaded", () => {
     const exportBtn = document.getElementById("export-word-btn");
     const modal = document.getElementById("export-modal");
@@ -30,25 +32,40 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
+    // Global Select All / None Checkbox Handler
     if (selectAllBtn) {
         selectAllBtn.addEventListener("change", (e) => {
             const isChecked = e.target.checked;
-            document.querySelectorAll('.export-sheet-columns input[type="checkbox"]').forEach(cb => {
-                if (cb.style.display !== 'none' && cb.closest('label').style.display !== 'none') {
-                    cb.checked = isChecked;
+            document.querySelectorAll('.export-sheet-group').forEach(group => {
+                // Only toggle checkboxes that are currently visible to the user
+                if (group.style.display !== 'none') {
+                    group.querySelectorAll('.col-checkbox, .sheet-toggle').forEach(cb => {
+                        cb.checked = isChecked;
+                        cb.indeterminate = false;
+                    });
                 }
             });
-            updateSummary();
-            saveSelections();
+            syncAllCheckboxes();
         });
     }
 
+    // Search columns within export modal
     if (searchInput) {
         searchInput.addEventListener("input", (e) => {
             const query = e.target.value.toLowerCase().trim();
-            document.querySelectorAll('.export-sheet-columns label').forEach(label => {
-                const text = label.textContent.toLowerCase();
-                label.style.display = text.includes(query) ? "flex" : "none";
+            document.querySelectorAll('.export-sheet-group').forEach(group => {
+                let hasVisible = false;
+                group.querySelectorAll('.export-sheet-columns label').forEach(label => {
+                    const text = label.textContent.toLowerCase();
+                    if (text.includes(query)) {
+                        label.style.display = "flex";
+                        hasVisible = true;
+                    } else {
+                        label.style.display = "none";
+                    }
+                });
+                // Hide the entire sheet group if no columns match the search query
+                group.style.display = hasVisible ? "block" : "none";
             });
         });
     }
@@ -67,13 +84,21 @@ async function generateWordDocument() {
     const generateBtn = document.getElementById("generate-word-btn");
 
     window.exportState.isGenerating = true;
-    if (loadingUI) loadingUI.style.display = "flex";
+    if (loadingUI) {
+        loadingUI.style.display = "flex";
+        loadingUI.innerHTML = `<div class="spinner-small"></div> Generating Document (<span id="export-progress">0%</span>)...`;
+    }
     if (generateBtn) generateBtn.disabled = true;
 
     // Allow UI to render loading state
     setTimeout(async () => {
         try {
             const doc = await buildDocxObject();
+            if (loadingUI) {
+                loadingUI.innerHTML = `<div class="spinner-small"></div> Packing file...`;
+            }
+            await yieldToMainThread();
+
             const blob = await docx.Packer.toBlob(doc);
 
             const url = URL.createObjectURL(blob);
@@ -96,193 +121,224 @@ async function generateWordDocument() {
     }, 100);
 }
 
-function buildDocxObject() {
-    return new Promise((resolve) => {
-        const docSections = [];
-        const selections = window.exportState.selections;
-        const structuredData = window.appState.structuredData;
+async function buildDocxObject() {
+    const docSections = [];
+    const selections = window.exportState.selections;
+    const structuredData = window.appState.structuredData;
 
-        // Helper formatting functions for Word styling
-        const createHeading = (text, level = 1) => new docx.Paragraph({
-            text: text,
-            heading: docx.HeadingLevel[`HEADING_${level}`],
-            spacing: { before: 400, after: 200 }
-        });
+    // Helper formatting functions for Word styling
+    const createHeading = (text, level = 1) => new docx.Paragraph({
+        text: text,
+        heading: docx.HeadingLevel[`HEADING_${level}`],
+        spacing: { before: 400, after: 200 }
+    });
 
-        const createTable = (headers, groupedRowsData, isUnclassified = false) => {
-            // Colors for header and alternating rows
-            const headerColor = "EAF2F8"; // Light Blue
+    const createTable = (sheetName, headers, groupedRowsData, isUnclassified = false) => {
+        // Color headers by sheet/transaction type
+        const getHeaderColor = (name) => {
+            const lower = name.toLowerCase();
+            if (lower.includes("transfer")) return "E8F8F5"; // Soft Green
+            if (lower.includes("atm")) return "FADBD8";      // Soft Red
+            if (lower.includes("pos")) return "FCF3CF";      // Soft Yellow
+            if (lower.includes("hold")) return "F5CBA7";     // Soft Orange
+            return "EAF2F8"; // Soft Blue (default)
+        };
 
-            const tableRows = [];
+        const headerColor = getHeaderColor(sheetName);
+        const tableRows = [];
 
-            // Header Row
-            tableRows.push(new docx.TableRow({
-                tableHeader: true,
-                children: headers.map(headerText => new docx.TableCell({
-                    children: [new docx.Paragraph({
-                        text: headerText,
-                        style: "Strong"
-                    })],
-                    shading: { fill: headerColor },
-                    margins: { top: 100, bottom: 100, left: 100, right: 100 }
-                }))
-            }));
+        // Header Row
+        tableRows.push(new docx.TableRow({
+            tableHeader: true,
+            children: headers.map(headerText => new docx.TableCell({
+                children: [new docx.Paragraph({
+                    text: headerText,
+                    style: "Strong"
+                })],
+                shading: { fill: headerColor },
+                margins: { top: 100, bottom: 100, left: 100, right: 100 }
+            }))
+        }));
 
-            if (isUnclassified || !Array.isArray(groupedRowsData)) {
-                 // Fallback flat rendering
-                const flatRows = Array.isArray(groupedRowsData) ? groupedRowsData : [];
-                flatRows.forEach((rowObj, index) => {
+        if (isUnclassified || !Array.isArray(groupedRowsData)) {
+            // Fallback flat rendering
+            const flatRows = Array.isArray(groupedRowsData) ? groupedRowsData : [];
+            flatRows.forEach((rowObj, index) => {
+                const rowColor = index % 2 === 0 ? "FFFFFF" : "F8F9F9";
+                tableRows.push(new docx.TableRow({
+                    children: headers.map(header => new docx.TableCell({
+                        children: [new docx.Paragraph({ text: String(rowObj[header] !== null && rowObj[header] !== undefined ? rowObj[header] : '') })],
+                        shading: { fill: rowColor },
+                        margins: { top: 50, bottom: 50, left: 100, right: 100 }
+                    }))
+                }));
+            });
+        } else {
+            // Grouped by receiver
+            groupedRowsData.forEach((group) => {
+                // Add receiver grouping divider row
+                if (group.receiver !== "Unknown Receiver") {
+                    tableRows.push(new docx.TableRow({
+                        children: [new docx.TableCell({
+                            children: [new docx.Paragraph({ text: `Receiver: ${group.receiver}`, style: "Strong" })],
+                            shading: { fill: "F2F4F4" }, // Shaded gray divider row
+                            margins: { top: 50, bottom: 50, left: 100, right: 100 },
+                            columnSpan: headers.length
+                        })]
+                    }));
+                }
+
+                // Add data rows
+                group.rows.forEach((rowObj, index) => {
                     const rowColor = index % 2 === 0 ? "FFFFFF" : "F8F9F9";
                     tableRows.push(new docx.TableRow({
                         children: headers.map(header => new docx.TableCell({
-                            children: [new docx.Paragraph({ text: String(rowObj[header] || '') })],
+                            children: [new docx.Paragraph({ text: String(rowObj[header] !== null && rowObj[header] !== undefined ? rowObj[header] : '') })],
                             shading: { fill: rowColor },
                             margins: { top: 50, bottom: 50, left: 100, right: 100 }
                         }))
                     }));
                 });
-            } else {
-                 // It's grouped by receiver (which might just be 'Unknown Receiver' group)
-                 groupedRowsData.forEach((group, groupIndex) => {
-                     // Add receiver grouping row if it's a specific receiver
-                     if (group.receiver !== "Unknown Receiver") {
-                         tableRows.push(new docx.TableRow({
-                            children: [new docx.TableCell({
-                                children: [new docx.Paragraph({ text: `Receiver: ${group.receiver}`, style: "Strong" })],
-                                shading: { fill: "F9EBEA" }, // Light Red/Pink for receiver grouping
-                                margins: { top: 50, bottom: 50, left: 100, right: 100 },
-                                columnSpan: headers.length
-                            })]
-                         }));
-                     }
-
-                     // Add data rows for this receiver
-                     group.rows.forEach((rowObj, index) => {
-                        const rowColor = index % 2 === 0 ? "FFFFFF" : "F8F9F9";
-                        tableRows.push(new docx.TableRow({
-                            children: headers.map(header => new docx.TableCell({
-                                children: [new docx.Paragraph({ text: String(rowObj[header] || '') })],
-                                shading: { fill: rowColor },
-                                margins: { top: 50, bottom: 50, left: 100, right: 100 }
-                            }))
-                        }));
-                     });
-                 });
-            }
-
-            return new docx.Table({
-                rows: tableRows,
-                width: { size: 100, type: docx.WidthType.PERCENTAGE }
             });
-        };
-
-        // 1. Process Classified Data Hierarchy
-        window.appState.layers.forEach(layerKey => {
-            if (layerKey === "Unclassified Data") return; // Handled separately
-
-            const entities = structuredData[layerKey];
-            let layerHasContent = false;
-
-            const layerSection = [];
-
-            Object.keys(entities).forEach(entityName => {
-                let entityHasContent = false;
-                const entityContent = [];
-
-                const sheets = entities[entityName];
-
-                Object.keys(sheets).forEach(sheetName => {
-                    const selectedCols = selections[sheetName] || [];
-                    if (selectedCols.length === 0) return;
-
-                    const rows = sheets[sheetName];
-                    if (rows.length === 0) return;
-
-                    // Group rows by receiver account if a receiver column exists (regardless of whether it's selected for export)
-                    const originalHeaders = window.appState.rawData[sheetName].headers;
-                    const receiverColName = originalHeaders.find(k => k.toLowerCase() === "account no" || k.toLowerCase().includes("to account") || k.toLowerCase().includes("receiver"));
-
-                    const grouped = {};
-                    rows.forEach(row => {
-                        const recVal = (receiverColName && row[receiverColName]) ? String(row[receiverColName]).trim() : "Unknown Receiver";
-                        if (!grouped[recVal]) grouped[recVal] = [];
-                        grouped[recVal].push(row);
-                    });
-
-                    const groupedRowsData = Object.keys(grouped).map(rec => ({
-                        receiver: rec,
-                        rows: grouped[rec]
-                    }));
-
-                    entityHasContent = true;
-                    entityContent.push(createHeading(`${sheetName} (${rows.length} rows)`, 3));
-                    entityContent.push(createTable(selectedCols, groupedRowsData));
-                    entityContent.push(new docx.Paragraph({ text: "" })); // spacing
-                });
-
-                if (entityHasContent) {
-                    layerHasContent = true;
-                    layerSection.push(createHeading(`Entity: ${entityName}`, 2));
-                    layerSection.push(...entityContent);
-                }
-            });
-
-            if (layerHasContent) {
-                docSections.push(createHeading(`Layer: ${layerKey}`, 1));
-                docSections.push(...layerSection);
-            }
-        });
-
-        // 2. Process Unclassified Data
-        if (structuredData["Unclassified Data"]) {
-            const entities = structuredData["Unclassified Data"];
-            let hasUnclassifiedContent = false;
-            const unclassifiedSection = [];
-
-            Object.keys(entities).forEach(entityName => {
-                const sheets = entities[entityName];
-                Object.keys(sheets).forEach(sheetName => {
-                    const selectedCols = selections[sheetName] || [];
-                    if (selectedCols.length === 0) return;
-
-                    const rows = sheets[sheetName];
-                    if (rows.length === 0) return;
-
-                    hasUnclassifiedContent = true;
-                    unclassifiedSection.push(createHeading(`Sheet: ${sheetName}`, 2));
-                    unclassifiedSection.push(createTable(selectedCols, rows, true));
-                    unclassifiedSection.push(new docx.Paragraph({ text: "" }));
-                });
-            });
-
-            if (hasUnclassifiedContent) {
-                docSections.push(createHeading(`Unclassified Data`, 1));
-                docSections.push(...unclassifiedSection);
-            }
         }
 
-        // Handle case where selections exist but no data matches hierarchy
-        if (docSections.length === 0) {
-             docSections.push(new docx.Paragraph({ text: "No data matched the selected columns for export." }));
-        }
-
-        const doc = new docx.Document({
-            sections: [{
-                properties: {},
-                children: [
-                    new docx.Paragraph({
-                        text: "Financial Transaction Export",
-                        heading: docx.HeadingLevel.TITLE,
-                        alignment: docx.AlignmentType.CENTER,
-                        spacing: { after: 400 }
-                    }),
-                    ...docSections
-                ]
-            }]
+        return new docx.Table({
+            rows: tableRows,
+            width: { size: 100, type: docx.WidthType.PERCENTAGE }
         });
+    };
 
-        resolve(doc);
+    // Calculate total entities to process for progress tracking
+    let totalSteps = 0;
+    window.appState.layers.forEach(layerKey => {
+        if (layerKey === "Unclassified Data") return;
+        totalSteps += Object.keys(structuredData[layerKey] || {}).length;
     });
+    if (structuredData["Unclassified Data"]) {
+        totalSteps += 1;
+    }
+    if (totalSteps === 0) totalSteps = 1;
+
+    let currentStep = 0;
+    const updateProgress = () => {
+        const progressEl = document.getElementById("export-progress");
+        if (progressEl) {
+            progressEl.innerText = Math.round((currentStep / totalSteps) * 100) + "%";
+        }
+    };
+
+    // 1. Process Classified Data Hierarchy
+    for (const layerKey of window.appState.layers) {
+        if (layerKey === "Unclassified Data") continue;
+
+        const entities = structuredData[layerKey] || {};
+        let layerHasContent = false;
+        const layerSection = [];
+
+        for (const entityName of Object.keys(entities)) {
+            let entityHasContent = false;
+            const entityContent = [];
+            const sheets = entities[entityName] || {};
+
+            for (const sheetName of Object.keys(sheets)) {
+                const selectedCols = selections[sheetName] || [];
+                if (selectedCols.length === 0) continue;
+
+                const rows = sheets[sheetName] || [];
+                if (rows.length === 0) continue;
+
+                // Group by receiver
+                const originalHeaders = window.appState.rawData[sheetName].headers;
+                const receiverColName = originalHeaders.find(k => k.toLowerCase() === "account no" || k.toLowerCase().includes("to account") || k.toLowerCase().includes("receiver"));
+
+                const grouped = {};
+                rows.forEach(row => {
+                    const recVal = (receiverColName && row[receiverColName]) ? String(row[receiverColName]).trim() : "Unknown Receiver";
+                    if (!grouped[recVal]) grouped[recVal] = [];
+                    grouped[recVal].push(row);
+                });
+
+                const groupedRowsData = Object.keys(grouped).map(rec => ({
+                    receiver: rec,
+                    rows: grouped[rec]
+                }));
+
+                entityHasContent = true;
+                entityContent.push(createHeading(`${sheetName} (${rows.length} rows)`, 3));
+                entityContent.push(createTable(sheetName, selectedCols, groupedRowsData));
+                entityContent.push(new docx.Paragraph({ text: "" }));
+            }
+
+            if (entityHasContent) {
+                layerHasContent = true;
+                layerSection.push(createHeading(`Entity: ${entityName}`, 2));
+                layerSection.push(...entityContent);
+            }
+
+            currentStep++;
+            updateProgress();
+            await yieldToMainThread(); // Yield to main thread after each entity
+        }
+
+        if (layerHasContent) {
+            docSections.push(createHeading(`Layer: ${layerKey}`, 1));
+            docSections.push(...layerSection);
+        }
+    }
+
+    // 2. Process Unclassified Data
+    if (structuredData["Unclassified Data"]) {
+        const entities = structuredData["Unclassified Data"] || {};
+        let hasUnclassifiedContent = false;
+        const unclassifiedSection = [];
+
+        for (const entityName of Object.keys(entities)) {
+            const sheets = entities[entityName] || {};
+            for (const sheetName of Object.keys(sheets)) {
+                const selectedCols = selections[sheetName] || [];
+                if (selectedCols.length === 0) continue;
+
+                const rows = sheets[sheetName] || [];
+                if (rows.length === 0) continue;
+
+                hasUnclassifiedContent = true;
+                unclassifiedSection.push(createHeading(`Sheet: ${sheetName}`, 2));
+                unclassifiedSection.push(createTable(sheetName, selectedCols, rows, true));
+                unclassifiedSection.push(new docx.Paragraph({ text: "" }));
+            }
+            await yieldToMainThread();
+        }
+
+        if (hasUnclassifiedContent) {
+            docSections.push(createHeading(`Unclassified Data`, 1));
+            docSections.push(...unclassifiedSection);
+        }
+
+        currentStep++;
+        updateProgress();
+        await yieldToMainThread();
+    }
+
+    if (docSections.length === 0) {
+        docSections.push(new docx.Paragraph({ text: "No data matched the selected columns for export." }));
+    }
+
+    const doc = new docx.Document({
+        sections: [{
+            properties: {},
+            children: [
+                new docx.Paragraph({
+                    text: "Financial Transaction Export",
+                    heading: docx.HeadingLevel.TITLE,
+                    alignment: docx.AlignmentType.CENTER,
+                    spacing: { after: 400 }
+                }),
+                ...docSections
+            ]
+        }]
+    });
+
+    return doc;
 }
 
 function loadSelections() {
@@ -301,10 +357,8 @@ function saveSelections() {
     document.querySelectorAll('.export-sheet-group').forEach(group => {
         const sheetName = group.dataset.sheet;
         selections[sheetName] = [];
-        group.querySelectorAll('input[type="checkbox"]:checked').forEach(cb => {
-            if(cb.classList.contains('col-checkbox')) {
-                selections[sheetName].push(cb.value);
-            }
+        group.querySelectorAll('.col-checkbox:checked').forEach(cb => {
+            selections[sheetName].push(cb.value);
         });
     });
     window.exportState.selections = selections;
@@ -323,7 +377,6 @@ function applyPreset(presetType) {
             } else if (presetType === 'none') {
                 cb.checked = false;
             } else if (presetType === 'summary') {
-                // Check if it's a primary/important column
                 const valLower = cb.value.toLowerCase();
                 const isImportant =
                     window.appState.primaryEntityPatterns.some(p => valLower.includes(p)) ||
@@ -338,8 +391,7 @@ function applyPreset(presetType) {
     document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
     document.querySelector(`.preset-btn[data-preset="${presetType}"]`)?.classList.add('active');
 
-    updateSummary();
-    saveSelections();
+    syncAllCheckboxes();
 }
 
 function renderExportModal() {
@@ -353,15 +405,15 @@ function renderExportModal() {
         return;
     }
 
-    // Check if sheets are classified or unclassified to separate them in UI
+    // Check classified sheets
     const classifiedSheets = new Set();
     const structuredData = window.appState.structuredData;
 
     Object.keys(structuredData).forEach(layer => {
         if (layer === "Unclassified Data") return;
-        const entities = structuredData[layer];
+        const entities = structuredData[layer] || {};
         Object.keys(entities).forEach(entity => {
-            Object.keys(entities[entity]).forEach(sheet => {
+            Object.keys(entities[entity] || {}).forEach(sheet => {
                 classifiedSheets.add(sheet);
             });
         });
@@ -376,19 +428,18 @@ function renderExportModal() {
         const headerDiv = document.createElement("div");
         headerDiv.className = "export-sheet-header";
 
-        // Check if there are saved selections for this sheet
-        const savedCols = window.exportState.selections[sheetName];
-        const allChecked = savedCols ? savedCols.length === headers.length : true;
-
         headerDiv.innerHTML = `
             <h4>${sheetName} (${rows.length} rows)</h4>
-            <label><input type="checkbox" class="sheet-toggle" ${allChecked ? 'checked' : ''}> Select All</label>
+            <label><input type="checkbox" class="sheet-toggle"> Select All</label>
         `;
 
         const colsDiv = document.createElement("div");
         colsDiv.className = "export-sheet-columns";
 
+        const savedCols = window.exportState.selections[sheetName];
+
         headers.forEach(header => {
+            // Default to checked if no saved configurations exist
             const isChecked = savedCols ? savedCols.includes(header) : true;
             const label = document.createElement("label");
             label.style.display = "flex";
@@ -398,17 +449,17 @@ function renderExportModal() {
             colsDiv.appendChild(label);
 
             label.querySelector('input').addEventListener('change', () => {
-                updateSummary();
-                saveSelections();
-                updateSheetToggle(groupDiv);
+                syncAllCheckboxes();
             });
         });
 
         const sheetToggle = headerDiv.querySelector('.sheet-toggle');
         sheetToggle.addEventListener('change', (e) => {
-            colsDiv.querySelectorAll('.col-checkbox').forEach(cb => cb.checked = e.target.checked);
-            updateSummary();
-            saveSelections();
+            const isChecked = e.target.checked;
+            colsDiv.querySelectorAll('.col-checkbox').forEach(cb => {
+                cb.checked = isChecked;
+            });
+            syncAllCheckboxes();
         });
 
         groupDiv.appendChild(headerDiv);
@@ -431,7 +482,6 @@ function renderExportModal() {
         container.appendChild(groupDiv);
     });
 
-    // Add visual separators if both exist
     if (hasClassified && hasUnclassified) {
         const firstUnclassified = container.querySelector('.unclassified-group');
         if (firstUnclassified) {
@@ -444,18 +494,64 @@ function renderExportModal() {
         }
     }
 
-    updateSummary();
-    // Ensure initial visual state of checkboxes is saved to state if empty (first run)
-    saveSelections();
+    // Initialize all checkboxes to match loaded state
+    syncAllCheckboxes();
 }
 
-function updateSheetToggle(groupDiv) {
-    const allCbs = groupDiv.querySelectorAll('.col-checkbox');
-    const checkedCbs = groupDiv.querySelectorAll('.col-checkbox:checked');
-    const sheetToggle = groupDiv.querySelector('.sheet-toggle');
-    if (sheetToggle) {
-        sheetToggle.checked = allCbs.length > 0 && allCbs.length === checkedCbs.length;
+function syncAllCheckboxes() {
+    const globalSelectAll = document.getElementById("export-select-all");
+    const sheetGroups = document.querySelectorAll(".export-sheet-group");
+
+    let totalCols = 0;
+    let totalCheckedCols = 0;
+
+    sheetGroups.forEach(group => {
+        const sheetToggle = group.querySelector(".sheet-toggle");
+        const colCheckboxes = group.querySelectorAll(".col-checkbox");
+
+        let sheetCols = colCheckboxes.length;
+        let checkedSheetCols = 0;
+
+        colCheckboxes.forEach(cb => {
+            if (cb.checked) {
+                checkedSheetCols++;
+            }
+        });
+
+        totalCols += sheetCols;
+        totalCheckedCols += checkedSheetCols;
+
+        // Update sheet-level select-all checkbox state
+        if (sheetToggle) {
+            if (checkedSheetCols === sheetCols && sheetCols > 0) {
+                sheetToggle.checked = true;
+                sheetToggle.indeterminate = false;
+            } else if (checkedSheetCols > 0) {
+                sheetToggle.checked = false;
+                sheetToggle.indeterminate = true;
+            } else {
+                sheetToggle.checked = false;
+                sheetToggle.indeterminate = false;
+            }
+        }
+    });
+
+    // Update global select-all checkbox state
+    if (globalSelectAll) {
+        if (totalCheckedCols === totalCols && totalCols > 0) {
+            globalSelectAll.checked = true;
+            globalSelectAll.indeterminate = false;
+        } else if (totalCheckedCols > 0) {
+            globalSelectAll.checked = false;
+            globalSelectAll.indeterminate = true;
+        } else {
+            globalSelectAll.checked = false;
+            globalSelectAll.indeterminate = false;
+        }
     }
+
+    updateSummary();
+    saveSelections();
 }
 
 function updateSummary() {
@@ -487,10 +583,10 @@ function updateSummary() {
     const warningText = document.getElementById("export-warning");
 
     if (colsSelected === 0) {
-        generateBtn.disabled = true;
-        warningText.style.display = "block";
+        if (generateBtn) generateBtn.disabled = true;
+        if (warningText) warningText.style.display = "block";
     } else {
-        generateBtn.disabled = false;
-        warningText.style.display = "none";
+        if (generateBtn && !window.exportState.isGenerating) generateBtn.disabled = false;
+        if (warningText) warningText.style.display = "none";
     }
 }

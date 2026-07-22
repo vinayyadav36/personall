@@ -56,73 +56,138 @@ function handleFile(file) {
     // Show loaders
     const localLoading = document.getElementById('local-loading');
     const globalLoading = document.getElementById('global-loading-overlay');
-    if (localLoading) localLoading.style.display = 'block';
-    if (globalLoading) globalLoading.style.display = 'flex';
+    if (localLoading) {
+        localLoading.style.display = 'block';
+        localLoading.querySelector('span').innerText = "Reading Excel file...";
+    }
+    if (globalLoading) {
+        globalLoading.style.display = 'flex';
+        globalLoading.querySelector('p').innerText = "Reading Excel file...";
+    }
 
     // Allow UI to update before blocking main thread
     setTimeout(() => {
         const reader = new FileReader();
         reader.onload = (e) => {
-            try {
-                const data = new Uint8Array(e.target.result);
-                const workbook = XLSX.read(data, { type: "array" });
-                processWorkbook(workbook);
-            } catch (error) {
-                console.error("Error reading Excel file:", error);
-                alert("Error parsing the Excel file. See console for details.");
-                if (localLoading) localLoading.style.display = 'none';
-                if (globalLoading) globalLoading.style.display = 'none';
-            }
+            const arrayBuffer = e.target.result;
+            const xlsxUrl = new URL('libs/xlsx.full.min.js', window.location.href).href;
+
+            if (localLoading) localLoading.querySelector('span').innerText = "Parsing workbook (in worker)...";
+            if (globalLoading) globalLoading.querySelector('p').innerText = "Parsing workbook (in worker)...";
+
+            // Inline Web Worker blob
+            const workerCode = `
+                self.onmessage = function(e) {
+                    const { arrayBuffer, xlsxUrl } = e.data;
+                    try {
+                        importScripts(xlsxUrl);
+                        const workbook = XLSX.read(arrayBuffer, { type: "array" });
+                        const rawData = {};
+
+                        workbook.SheetNames.forEach(sheetName => {
+                            const sheet = workbook.Sheets[sheetName];
+                            const rawRows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null });
+
+                            if (rawRows.length === 0) return;
+
+                            let headerRowIndex = 0;
+                            for (let i = 0; i < Math.min(rawRows.length, 10); i++) {
+                                const row = rawRows[i];
+                                if (row && row.filter(cell => cell !== null && cell !== "").length > 2) {
+                                    headerRowIndex = i;
+                                    break;
+                                }
+                            }
+
+                            const headers = rawRows[headerRowIndex].map(h => (h ? h.toString().trim() : "Column_" + Math.random()));
+                            const dataRows = [];
+
+                            for (let i = headerRowIndex + 1; i < rawRows.length; i++) {
+                                const rowArr = rawRows[i];
+                                if (!rowArr || rowArr.length === 0 || rowArr.every(cell => cell === null || cell === "")) continue;
+
+                                const rowObj = {};
+                                headers.forEach((header, index) => {
+                                    rowObj[header] = rowArr[index];
+                                });
+                                dataRows.push(rowObj);
+                            }
+
+                            if (dataRows.length > 0) {
+                                rawData[sheetName] = { headers, rows: dataRows };
+                            }
+                        });
+
+                        self.postMessage({ status: "success", rawData: rawData });
+                    } catch (error) {
+                        self.postMessage({ status: "error", error: error.message || String(error) });
+                    }
+                };
+            `;
+
+            const blob = new Blob([workerCode], { type: "application/javascript" });
+            const worker = new Worker(URL.createObjectURL(blob));
+
+            worker.onmessage = function(evt) {
+                const response = evt.data;
+                if (response.status === "success") {
+                    if (localLoading) localLoading.querySelector('span').innerText = "Structuring data...";
+                    if (globalLoading) globalLoading.querySelector('p').innerText = "Structuring data...";
+                    
+                    setTimeout(() => {
+                        window.appState.rawData = response.rawData;
+                        window.appState.structuredData = {};
+                        window.appState.layers = [];
+                        window.appState.stats = { layers: 0, entities: 0, transactions: 0, totalAmount: 0 };
+                        
+                        structureData();
+                        buildSearchIndex();
+                        updateDashboardUI();
+                        worker.terminate();
+                    }, 50);
+                } else {
+                    console.error("Error inside Web Worker:", response.error);
+                    alert("Error parsing workbook: " + response.error);
+                    if (localLoading) localLoading.style.display = 'none';
+                    if (globalLoading) globalLoading.style.display = 'none';
+                    worker.terminate();
+                }
+            };
+
+            worker.postMessage({ arrayBuffer, xlsxUrl });
         };
         reader.readAsArrayBuffer(file);
     }, 100);
 }
 
-function processWorkbook(workbook) {
-    window.appState.rawData = {};
-    window.appState.structuredData = {};
-    window.appState.layers = [];
-    window.appState.stats = { layers: 0, entities: 0, transactions: 0, totalAmount: 0 };
+function buildSearchIndex() {
+    window.appState.searchIndex = [];
+    const rawData = window.appState.rawData;
+    const structuredData = window.appState.structuredData;
 
-    workbook.SheetNames.forEach(sheetName => {
-        const sheet = workbook.Sheets[sheetName];
-        // Read raw array to find headers manually
-        const rawRows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null });
+    window.appState.layers.forEach(layerKey => {
+        const entities = structuredData[layerKey];
+        Object.keys(entities).forEach(entityName => {
+            const sheets = entities[entityName];
+            Object.keys(sheets).forEach(sheetName => {
+                const rows = sheets[sheetName];
+                rows.forEach(row => {
+                    const normalizedText = Object.values(row)
+                        .filter(v => v !== null && v !== undefined)
+                        .map(v => String(v).toLowerCase())
+                        .join(" ");
 
-        if (rawRows.length === 0) return;
-
-        // Find header row (first row with significant data)
-        let headerRowIndex = 0;
-        for (let i = 0; i < Math.min(rawRows.length, 10); i++) {
-            const row = rawRows[i];
-            if (row && row.filter(cell => cell !== null && cell !== "").length > 2) {
-                headerRowIndex = i;
-                break;
-            }
-        }
-
-        const headers = rawRows[headerRowIndex].map(h => (h ? h.toString().trim() : `Column_${Math.random()}`));
-        const dataRows = [];
-
-        for (let i = headerRowIndex + 1; i < rawRows.length; i++) {
-            const rowArr = rawRows[i];
-            // Skip completely empty rows
-            if (!rowArr || rowArr.length === 0 || rowArr.every(cell => cell === null || cell === "")) continue;
-
-            const rowObj = {};
-            headers.forEach((header, index) => {
-                rowObj[header] = rowArr[index];
+                    window.appState.searchIndex.push({
+                        normalizedText,
+                        row,
+                        layer: layerKey,
+                        sheet: sheetName,
+                        entity: entityName
+                    });
+                });
             });
-            dataRows.push(rowObj);
-        }
-
-        if (dataRows.length > 0) {
-            window.appState.rawData[sheetName] = { headers, rows: dataRows };
-        }
+        });
     });
-
-    structureData();
-    updateDashboardUI();
 }
 
 function getColumnNameByPattern(headers, patterns) {

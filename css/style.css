@@ -639,3 +639,92 @@ header.top-bar h1 {
     background-color: var(--card-bg);
     border-top: 1px solid var(--border-color);
 }
+
+/* Search Summary Bar */
+.search-summary-bar {
+    background: #e8f4fd;
+    border-bottom: 1px solid var(--border-color);
+    padding: 10px 20px;
+    font-size: 0.9rem;
+    color: #2c3e50;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+}
+
+.search-summary-bar .summary-text {
+    font-weight: 500;
+}
+
+.search-summary-bar .search-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+}
+
+.search-summary-bar .search-chip {
+    background: var(--accent-color);
+    color: white;
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+    border: none;
+    transition: background 0.2s;
+    outline: none;
+}
+
+.search-summary-bar .search-chip:hover {
+    background: #2980b9;
+}
+
+.search-summary-bar .search-chip.active-chip {
+    background: var(--success-color);
+}
+
+/* Sidebar Highlights */
+.layer-list li.has-matches {
+    background-color: #fef9e7;
+    border-left: 3px solid var(--warning-color);
+}
+
+.layer-list li.has-matches.active {
+    border-left-color: var(--accent-color);
+    background-color: #eef2f5;
+}
+
+/* Graph Performance Banner */
+.graph-perf-banner {
+    background: #fef9e7;
+    border-bottom: 1px solid var(--border-color);
+    padding: 8px 15px;
+    font-size: 0.85rem;
+    color: #7f8c8d;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    z-index: 10;
+    position: relative;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.graph-perf-banner button {
+    background: var(--accent-color);
+    color: white;
+    border: none;
+    padding: 4px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.8rem;
+    font-weight: bold;
+    outline: none;
+}
+
+.graph-perf-banner button:hover {
+    background: #2980b9;
+}
+
