@@ -104,23 +104,84 @@ function renderLayerData(layerKey, container) {
             thead.appendChild(trHead);
             table.appendChild(thead);
 
-            // Generate Rows
+            // Generate Rows with Pagination
             const tbody = document.createElement("tbody");
-            rows.forEach(row => {
-                const tr = document.createElement("tr");
-                originalHeaders.forEach(col => {
-                    const td = document.createElement("td");
-                    td.innerText = row[col] !== null && row[col] !== undefined ? row[col] : "";
-                    td.className = isPrimaryEntityCol(col) ? "primary-entity-col" : "";
-                    tr.appendChild(td);
-                });
-                // Add tags to row for easy filtering
-                tr.dataset.search = Object.values(row).join(" ").toLowerCase();
-                tbody.appendChild(tr);
-            });
             table.appendChild(tbody);
-
             txnSection.appendChild(table);
+
+            const paginationControls = document.createElement("div");
+            paginationControls.className = "pagination-controls";
+            paginationControls.style.display = "none"; // Hide initially if 1 page
+            const prevBtn = document.createElement("button");
+            const pageInfo = document.createElement("span");
+            const nextBtn = document.createElement("button");
+            paginationControls.appendChild(prevBtn);
+            paginationControls.appendChild(pageInfo);
+            paginationControls.appendChild(nextBtn);
+            txnSection.appendChild(paginationControls);
+
+            const ROWS_PER_PAGE = 50;
+
+            // Attach render logic to the table so global search can call it
+            table.filteredRows = [...rows];
+            table.currentPage = 1;
+
+            table.renderPage = () => {
+                const totalPages = Math.ceil(table.filteredRows.length / ROWS_PER_PAGE) || 1;
+                if (table.currentPage > totalPages) table.currentPage = totalPages;
+
+                tbody.innerHTML = "";
+                const start = (table.currentPage - 1) * ROWS_PER_PAGE;
+                const end = start + ROWS_PER_PAGE;
+                const pageRows = table.filteredRows.slice(start, end);
+
+                pageRows.forEach(row => {
+                    const tr = document.createElement("tr");
+                    originalHeaders.forEach(col => {
+                        const td = document.createElement("td");
+                        td.innerText = row[col] !== null && row[col] !== undefined ? row[col] : "";
+                        td.className = isPrimaryEntityCol(col) ? "primary-entity-col" : "";
+                        tr.appendChild(td);
+                    });
+                    tbody.appendChild(tr);
+                });
+
+                setupPrimaryEntityToggle(true);
+
+                if (totalPages > 1) {
+                    paginationControls.style.display = "flex";
+                    prevBtn.innerText = "Previous";
+                    prevBtn.disabled = table.currentPage === 1;
+                    pageInfo.innerText = `Page ${table.currentPage} of ${totalPages}`;
+                    nextBtn.innerText = "Next";
+                    nextBtn.disabled = table.currentPage === totalPages;
+                } else {
+                    paginationControls.style.display = "none";
+                }
+            };
+
+            // Attach actual full row data for searching
+            table.fullRowsData = rows.map(r => ({
+                row: r,
+                searchString: Object.values(r).join(" ").toLowerCase()
+            }));
+
+            prevBtn.addEventListener("click", () => {
+                if (table.currentPage > 1) {
+                    table.currentPage--;
+                    table.renderPage();
+                }
+            });
+
+            nextBtn.addEventListener("click", () => {
+                const totalPages = Math.ceil(table.filteredRows.length / ROWS_PER_PAGE);
+                if (table.currentPage < totalPages) {
+                    table.currentPage++;
+                    table.renderPage();
+                }
+            });
+
+            table.renderPage();
             content.appendChild(txnSection);
         });
 
@@ -156,7 +217,7 @@ function isPrimaryEntityCol(colName) {
     return window.appState.primaryEntityPatterns.some(p => lower.includes(p));
 }
 
-function setupPrimaryEntityToggle() {
+function setupPrimaryEntityToggle(skipEvent = false) {
     const toggle = document.getElementById("toggle-primary-entity");
     const updateVisibility = () => {
         const cols = document.querySelectorAll(".primary-entity-col");
@@ -164,35 +225,67 @@ function setupPrimaryEntityToggle() {
             c.style.display = toggle.checked ? "table-cell" : "none";
         });
     };
-    toggle.addEventListener("change", updateVisibility);
+
+    if (!skipEvent) {
+        // Remove old listener if exists
+        const newToggle = toggle.cloneNode(true);
+        toggle.parentNode.replaceChild(newToggle, toggle);
+        newToggle.addEventListener("change", updateVisibility);
+    }
     updateVisibility(); // initial state
+}
+
+window.lastSearchQuery = "";
+
+function performSearch(queryText = null, updateWindowRef = true) {
+    const searchInput = document.getElementById("global-search");
+    const query = queryText !== null ? queryText : searchInput.value.toLowerCase().trim();
+    if (updateWindowRef) window.lastSearchQuery = query;
+
+    const tables = document.querySelectorAll(".data-table");
+
+    tables.forEach(table => {
+        if (!table.fullRowsData) return; // Skip if not initialized
+
+        if (query === "") {
+            table.filteredRows = table.fullRowsData.map(item => item.row);
+        } else {
+            table.filteredRows = table.fullRowsData
+                .filter(item => item.searchString.includes(query))
+                .map(item => item.row);
+        }
+        table.currentPage = 1;
+        table.renderPage();
+    });
+
+    // Hide empty entity sections
+    document.querySelectorAll(".entity-section").forEach(section => {
+        const hasVisibleData = Array.from(section.querySelectorAll(".data-table")).some(table => table.filteredRows && table.filteredRows.length > 0);
+        section.style.display = hasVisibleData ? "block" : "none";
+    });
 }
 
 function setupSearchFilter() {
     const searchInput = document.getElementById("global-search");
     const filterBtn = document.getElementById("filter-btn");
 
-    const performSearch = () => {
-        const query = searchInput.value.toLowerCase().trim();
-        const rows = document.querySelectorAll(".data-table tbody tr");
+    // Remove old listeners
+    const newBtn = filterBtn.cloneNode(true);
+    filterBtn.parentNode.replaceChild(newBtn, filterBtn);
 
-        rows.forEach(row => {
-            if (query === "" || row.dataset.search.includes(query)) {
-                row.style.display = "table-row";
-            } else {
-                row.style.display = "none";
-            }
-        });
+    const newInput = searchInput.cloneNode(true);
+    searchInput.parentNode.replaceChild(newInput, searchInput);
 
-        // Hide empty entity sections
-        document.querySelectorAll(".entity-section").forEach(section => {
-            const visibleRows = section.querySelectorAll(".data-table tbody tr[style='display: table-row;']");
-            section.style.display = visibleRows.length > 0 || query === "" ? "block" : "none";
-        });
-    };
+    newBtn.addEventListener("click", () => performSearch());
 
-    filterBtn.addEventListener("click", performSearch);
-    searchInput.addEventListener("keyup", (e) => {
-        if (e.key === "Enter") performSearch();
+    let debounceTimer;
+    newInput.addEventListener("keyup", (e) => {
+        if (e.key === "Enter") {
+            clearTimeout(debounceTimer);
+            performSearch();
+        } else {
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(() => performSearch(), 300);
+        }
     });
 }
