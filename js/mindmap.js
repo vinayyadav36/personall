@@ -43,68 +43,164 @@ window.initMindMap = function() {
 
     const elements = generateGraphElements(aggregateMode);
 
-    const cy = cytoscape({
+    // Layer-based color palette — each layer gets a distinct, high-contrast color
+    var layerColors = [
+        '#2980b9', // Layer 1 — strong blue
+        '#27ae60', // Layer 2 — green
+        '#e67e22', // Layer 3 — orange
+        '#8e44ad', // Layer 4 — purple
+        '#e74c3c', // Layer 5 — red
+        '#16a085', // Layer 6 — teal
+        '#d35400', // Layer 7 — dark orange
+        '#2c3e50', // Layer 8 — dark blue-grey
+        '#f39c12', // Layer 9 — gold
+        '#1abc9c'  // Layer 10 — mint
+    ];
+    var unclassifiedColor = '#95a5a6'; // grey for unclassified
+
+    // Pre-compute per-node background and border colors based on layer
+    function getNodeColors(layerIndex, layerStr) {
+        if (layerStr === 'Unclassified Data') return unclassifiedColor;
+        return layerColors[(layerIndex - 1) % layerColors.length] || unclassifiedColor;
+    }
+
+    // Build dynamic styles that reference node data
+    var dynamicStyle = [
+        {
+            selector: 'node[type="entity"]',
+            style: {
+                'label': 'data(label)',
+                'color': '#ffffff',
+                'font-size': '14px',
+                'font-weight': 'bold',
+                'text-valign': 'bottom',
+                'text-halign': 'center',
+                'text-margin-y': '8px',
+                'width': 65,
+                'height': 65,
+                'border-width': 5,
+                'shape': 'ellipse',
+                'text-outline-color': '#ffffff',
+                'text-outline-width': 2
+            }
+        },
+        // Per-layer entity coloring — applied via cascading selectors
+        ...layerColors.map(function(color, i) {
+            return {
+                selector: 'node[type="entity"][layer=' + (i + 1) + ']',
+                style: {
+                    'background-color': color,
+                    'border-color': color
+                }
+            };
+        }),
+        {
+            selector: 'node[type="entity"][layerStr="Unclassified Data"]',
+            style: {
+                'background-color': unclassifiedColor,
+                'border-color': unclassifiedColor
+            }
+        },
+        {
+            selector: 'node[type="terminal"]',
+            style: {
+                'background-color': '#c0392b',
+                'label': 'data(label)',
+                'color': '#ffffff',
+                'font-size': '11px',
+                'font-weight': 'bold',
+                'text-valign': 'center',
+                'text-halign': 'center',
+                'text-outline-color': '#c0392b',
+                'text-outline-width': 1.5,
+                'width': 35,
+                'height': 35,
+                'shape': 'diamond',
+                'border-width': 3,
+                'border-color': '#962d22'
+            }
+        },
+        {
+            selector: 'edge',
+            style: {
+                'width': 2,
+                'line-color': '#bdc3c7',
+                'target-arrow-color': '#bdc3c7',
+                'target-arrow-shape': 'triangle',
+                'curve-style': 'bezier',
+                'label': 'data(amount)',
+                'font-size': '10px',
+                'font-weight': 'bold',
+                'text-rotation': 'autorotate',
+                'text-margin-y': '-12px',
+                'color': '#555555',
+                'text-outline-color': '#ffffff',
+                'text-outline-width': 1.5
+            }
+        },
+        {
+            selector: 'edge[type="money_transfer"]',
+            style: {
+                'line-color': '#27ae60',
+                'target-arrow-color': '#27ae60',
+                'line-style': 'solid',
+                'width': 4
+            }
+        },
+        {
+            selector: 'edge[type="terminal_flow"]',
+            style: {
+                'line-style': 'dashed',
+                'line-color': '#e67e22',
+                'target-arrow-color': '#e67e22',
+                'width': 2
+            }
+        },
+        // Hover effects for interactivity
+        {
+            selector: 'node[type="entity"]:active',
+            style: {
+                'overlay-opacity': 0.15,
+                'overlay-color': '#ffffff'
+            }
+        },
+        {
+            selector: 'node[type="terminal"]:active',
+            style: {
+                'overlay-opacity': 0.15,
+                'overlay-color': '#ffffff'
+            }
+        }
+    ];
+
+    var cy = cytoscape({
         container: document.getElementById('cy'),
         elements: elements,
-        style: [
-            {
-                selector: 'node[type="entity"]',
-                style: {
-                    'background-color': '#3498db',
-                    'label': 'data(label)',
-                    'color': '#2c3e50',
-                    'font-size': '12px',
-                    'text-valign': 'bottom',
-                    'text-halign': 'center',
-                    'text-margin-y': '5px',
-                    'width': '40px',
-                    'height': '40px',
-                    'border-width': 2,
-                    'border-color': '#2980b9'
-                }
-            },
-            {
-                selector: 'node[type="terminal"]',
-                style: {
-                    'background-color': '#e74c3c',
-                    'label': 'data(label)',
-                    'color': '#c0392b',
-                    'font-size': '10px',
-                    'text-valign': 'center',
-                    'text-halign': 'center',
-                    'width': '25px',
-                    'height': '25px',
-                    'shape': 'diamond'
-                }
-            },
-            {
-                selector: 'edge',
-                style: {
-                    'width': 2,
-                    'line-color': '#bdc3c7',
-                    'target-arrow-color': '#bdc3c7',
-                    'target-arrow-shape': 'triangle',
-                    'curve-style': 'bezier',
-                    'label': 'data(amount)',
-                    'font-size': '8px',
-                    'text-rotation': 'autorotate',
-                    'text-margin-y': '-10px',
-                    'color': '#7f8c8d'
-                }
-            },
-            {
-                selector: 'edge[type="money_transfer"]',
-                style: {
-                    'line-color': '#2ecc71',
-                    'target-arrow-color': '#2ecc71',
-                    'width': 3
-                }
-            }
-        ],
-        layout: getLayoutOptions(document.getElementById("toggle-layout")?.checked || false)
+        style: dynamicStyle,
+        layout: getLayoutOptions(document.getElementById("toggle-layout")?.checked || false),
+        minZoom: 0.15,
+        maxZoom: 3,
+        wheelSensitivity: 0.3
     });
 
+    // Fit the graph to the viewport after layout completes
+    setTimeout(function() {
+        cy.fit(undefined, 40);
+        cy.center();
+    }, 100);
+
     window.appState.cy = cy;
+
+    // Hover effects — scale up entity on mouseover for discoverability
+    cy.on('mouseover', 'node[type="entity"]', function(evt) {
+        evt.target.style('width', 80);
+        evt.target.style('height', 80);
+        evt.target.style('font-size', '16px');
+        evt.target.style('z-index', 999);
+    });
+    cy.on('mouseout', 'node[type="entity"]', function(evt) {
+        evt.target.removeStyle('width height font-size z-index');
+    });
 
     // Interaction: show details on click
     cy.on('tap', 'node', function(evt){
@@ -349,22 +445,26 @@ function getLayoutOptions(isSwimlane) {
         return {
             name: 'breadthfirst',
             directed: true,
-            padding: 10,
-            spacingFactor: 1.5,
+            padding: 60,
+            spacingFactor: 2.5,
+            avoidOverlap: true,
+            nodeDimensionsIncludeLabels: true,
             roots: window.appState.cy ? window.appState.cy.nodes('[layer = 1]') : undefined
         };
     } else {
         return {
             name: 'concentric',
             concentric: function(node) {
-                const maxLayer = window.appState.layers.length + 1;
+                var maxLayer = window.appState.layers.length + 1;
                 return maxLayer - (node.data('layer') || 1);
             },
             levelWidth: function(nodes) {
                 return 1;
             },
-            padding: 30,
-            spacingFactor: 1.2
+            padding: 80,
+            spacingFactor: 2.2,
+            avoidOverlap: true,
+            nodeDimensionsIncludeLabels: true
         };
     }
 }

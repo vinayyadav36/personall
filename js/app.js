@@ -1,7 +1,7 @@
 // Global State
 window.appState = {
-    rawData: {}, // { sheetName: { headers: [], rows: [] } }
-    structuredData: {}, // { layerNumber: { entityName: { sheetName: [ rows ] } } }
+    rawData: {},
+    structuredData: {},
     layers: [],
     stats: {
         layers: 0,
@@ -15,26 +15,26 @@ window.appState = {
     layerPatterns: ["layer", "layer no", "lyr"]
 };
 
-document.addEventListener("DOMContentLoaded", () => {
+document.addEventListener("DOMContentLoaded", function () {
     setupDragAndDrop();
     setupTabs();
 });
 
 function setupDragAndDrop() {
-    const dropZone = document.getElementById("drop-zone");
-    const fileInput = document.getElementById("file-input");
+    var dropZone = document.getElementById("drop-zone");
+    var fileInput = document.getElementById("file-input");
 
-    dropZone.addEventListener("dragover", (e) => {
+    dropZone.addEventListener("dragover", function (e) {
         e.preventDefault();
         dropZone.style.borderColor = "var(--success-color)";
     });
 
-    dropZone.addEventListener("dragleave", (e) => {
+    dropZone.addEventListener("dragleave", function (e) {
         e.preventDefault();
         dropZone.style.borderColor = "var(--accent-color)";
     });
 
-    dropZone.addEventListener("drop", (e) => {
+    dropZone.addEventListener("drop", function (e) {
         e.preventDefault();
         dropZone.style.borderColor = "var(--accent-color)";
         if (e.dataTransfer.files.length) {
@@ -42,302 +42,23 @@ function setupDragAndDrop() {
         }
     });
 
-    fileInput.addEventListener("change", (e) => {
+    fileInput.addEventListener("change", function (e) {
         if (e.target.files.length) {
             handleFile(e.target.files[0]);
         }
     });
 }
 
-// Sync XHR to read the XLSX library text. Works on HTTP/HTTPS servers.
-// Throws under file:// in standard browser environments due to local CORS restrictions.
-function loadXlsxLibraryText() {
-    var xhr = new XMLHttpRequest();
-    xhr.open("GET", "libs/xlsx.full.min.js", false); // synchronous XHR
-    xhr.send();
-    if (xhr.status === 0 || xhr.status === 200) {
-        return xhr.responseText;
-    }
-    throw new Error("Could not load libs/xlsx.full.min.js (status " + xhr.status + ")");
-}
-
-function handleFile(file) {
-    if (!file.name.endsWith(".xlsx")) {
-        alert("Please upload a valid .xlsx file.");
-        return;
-    }
-
-    // Show loaders
-    var localLoading = document.getElementById("local-loading");
-    var globalLoading = document.getElementById("global-loading-overlay");
-    if (localLoading) {
-        localLoading.style.display = "block";
-        localLoading.querySelector("span").innerText = "Reading Excel file...";
-    }
-    if (globalLoading) {
-        globalLoading.style.display = "flex";
-        globalLoading.querySelector("p").innerText = "Reading Excel file...";
-    }
-
-    // Allow UI to update before blocking main thread
-    setTimeout(function () {
-        var xlsxCode = null;
-        var useWorker = true;
-
-        // XHR loading check
-        if (window.location.protocol === 'file:') {
-            useWorker = false;
-        } else {
-            try {
-                xlsxCode = loadXlsxLibraryText();
-            } catch (err) {
-                console.warn("Failed to load XLSX library for worker: " + err.message + ". Falling back to main-thread parsing.");
-                useWorker = false;
-            }
-        }
-
-        var reader = new FileReader();
-        reader.onload = function (e) {
-            var arrayBuffer = e.target.result;
-
-            if (useWorker) {
-                try {
-                    runWorker(arrayBuffer, xlsxCode, localLoading, globalLoading);
-                } catch (workerErr) {
-                    console.warn("Worker creation failed, falling back to main thread:", workerErr);
-                    parseMainThreadAsync(arrayBuffer, localLoading, globalLoading);
-                }
-            } else {
-                parseMainThreadAsync(arrayBuffer, localLoading, globalLoading);
-            }
-        };
-        reader.readAsArrayBuffer(file);
-    }, 100);
-}
-
-// Web Worker handler
-function runWorker(arrayBuffer, xlsxCode, localLoading, globalLoading) {
-    if (localLoading) localLoading.querySelector("span").innerText = "Parsing workbook (in worker)...";
-    if (globalLoading) globalLoading.querySelector("p").innerText = "Parsing workbook (in worker)...";
-
-    // Build the worker code string using identical helper functions from main thread (DRY)
-    var workerCode = xlsxCode + "\n" +
-        getColumnNameByPattern.toString() + "\n" +
-        structureData.toString() + "\n" +
-        buildSearchIndex.toString() + "\n" +
-        `
-        self.onmessage = function(e) {
-            var data = e.data;
-            var arrayBuffer = data.arrayBuffer;
-            var primaryEntityPatterns = data.primaryEntityPatterns;
-            var layerPatterns = data.layerPatterns;
-            try {
-                var workbook = XLSX.read(arrayBuffer, { type: "array" });
-                var rawData = {};
-
-                workbook.SheetNames.forEach(function(sheetName) {
-                    var sheet = workbook.Sheets[sheetName];
-                    var rawRows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null });
-
-                    if (rawRows.length === 0) return;
-
-                    var headerRowIndex = 0;
-                    for (var i = 0; i < Math.min(rawRows.length, 10); i++) {
-                        var row = rawRows[i];
-                        if (row && row.filter(function(c) { return c !== null && c !== ""; }).length > 2) {
-                            headerRowIndex = i;
-                            break;
-                        }
-                    }
-
-                    var headers = rawRows[headerRowIndex].map(function(h) {
-                        return h ? h.toString().trim() : "Column_" + Math.random();
-                    });
-                    var dataRows = [];
-
-                    for (var i2 = headerRowIndex + 1; i2 < rawRows.length; i2++) {
-                        var rowArr = rawRows[i2];
-                        if (!rowArr || rowArr.length === 0 || rowArr.every(function(c) { return c === null || c === ""; })) continue;
-                        var rowObj = {};
-                        headers.forEach(function(header, index) {
-                            rowObj[header] = rowArr[index];
-                        });
-                        dataRows.push(rowObj);
-                    }
-
-                    if (dataRows.length > 0) {
-                        rawData[sheetName] = { headers: headers, rows: dataRows };
-                    }
-                });
-
-                var result = structureData(rawData, layerPatterns, primaryEntityPatterns);
-                var searchIndex = buildSearchIndex(result.structuredData, result.layers);
-
-                self.postMessage({
-                    status: "success",
-                    rawData: rawData,
-                    structuredData: result.structuredData,
-                    layers: result.layers,
-                    stats: result.stats,
-                    searchIndex: searchIndex
-                });
-            } catch (error) {
-                self.postMessage({ status: "error", error: error.message || String(error) });
-            }
-        };
-        `;
-
-    var blob = new Blob([workerCode], { type: "application/javascript" });
-    var workerUrl = URL.createObjectURL(blob);
-    var worker = new Worker(workerUrl);
-
-    worker.onmessage = function (evt) {
-        var response = evt.data;
-        if (response.status === "success") {
-            window.appState.rawData = response.rawData;
-            window.appState.structuredData = response.structuredData;
-            window.appState.layers = response.layers;
-            window.appState.stats = response.stats;
-            window.appState.searchIndex = response.searchIndex;
-            window.appState.mindMapReady = false;
-
-            updateDashboardUI();
-        } else {
-            console.error("Worker parsing error:", response.error);
-            alert("Error parsing workbook: " + response.error);
-        }
-
-        if (localLoading) localLoading.style.display = "none";
-        if (globalLoading) globalLoading.style.display = "none";
-        worker.terminate();
-        URL.revokeObjectURL(workerUrl);
-    };
-
-    worker.onerror = function (err) {
-        console.warn("Worker error event, falling back to main-thread parsing:", err);
-        worker.terminate();
-        URL.revokeObjectURL(workerUrl);
-        parseMainThreadAsync(arrayBuffer, localLoading, globalLoading);
-    };
-
-    worker.postMessage({
-        arrayBuffer: arrayBuffer,
-        primaryEntityPatterns: window.appState.primaryEntityPatterns,
-        layerPatterns: window.appState.layerPatterns
-    });
-}
-
-// Progressive, asynchronous main-thread parser fallback
-function parseMainThreadAsync(arrayBuffer, localLoading, globalLoading) {
-    if (localLoading) localLoading.querySelector("span").innerText = "Reading Excel workbook...";
-    if (globalLoading) globalLoading.querySelector("p").innerText = "Reading Excel workbook...";
-
-    setTimeout(function () {
-        try {
-            var data = new Uint8Array(arrayBuffer);
-            var workbook = XLSX.read(data, { type: "array" });
-            processWorkbookAsync(workbook, localLoading, globalLoading);
-        } catch (error) {
-            console.error("Error parsing workbook on main thread:", error);
-            alert("Error parsing Excel file: " + (error.message || String(error)));
-            if (localLoading) localLoading.style.display = "none";
-            if (globalLoading) globalLoading.style.display = "none";
-        }
-    }, 50);
-}
-
-// Progressive sheet-by-sheet parser to prevent blocking main thread
-function processWorkbookAsync(workbook, localLoading, globalLoading) {
-    var rawData = {};
-    var sheetNames = workbook.SheetNames;
-    var currentSheetIndex = 0;
-
-    function parseNextSheet() {
-        if (currentSheetIndex >= sheetNames.length) {
-            if (localLoading) localLoading.querySelector("span").innerText = "Structuring data...";
-            if (globalLoading) globalLoading.querySelector("p").innerText = "Structuring data...";
-
-            setTimeout(function () {
-                try {
-                    var result = structureData(rawData, window.appState.layerPatterns, window.appState.primaryEntityPatterns);
-                    var searchIndex = buildSearchIndex(result.structuredData, result.layers);
-
-                    window.appState.rawData = rawData;
-                    window.appState.structuredData = result.structuredData;
-                    window.appState.layers = result.layers;
-                    window.appState.stats = result.stats;
-                    window.appState.searchIndex = searchIndex;
-                    window.appState.mindMapReady = false;
-
-                    updateDashboardUI();
-                } catch (error) {
-                    console.error("Error structuring data:", error);
-                    alert("Error structuring data: " + error.message);
-                } finally {
-                    if (localLoading) localLoading.style.display = "none";
-                    if (globalLoading) globalLoading.style.display = "none";
-                }
-            }, 50);
-            return;
-        }
-
-        var sheetName = sheetNames[currentSheetIndex];
-        if (localLoading) localLoading.querySelector("span").innerText = "Parsing sheet: " + sheetName + "...";
-        if (globalLoading) globalLoading.querySelector("p").innerText = "Parsing sheet: " + sheetName + "...";
-
-        setTimeout(function () {
-            try {
-                var sheet = workbook.Sheets[sheetName];
-                var rawRows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null });
-
-                if (rawRows.length > 0) {
-                    var headerRowIndex = 0;
-                    for (var i = 0; i < Math.min(rawRows.length, 10); i++) {
-                        var row = rawRows[i];
-                        if (row && row.filter(function (c) { return c !== null && c !== ""; }).length > 2) {
-                            headerRowIndex = i;
-                            break;
-                        }
-                    }
-
-                    var headers = rawRows[headerRowIndex].map(function (h) {
-                        return h ? h.toString().trim() : "Column_" + Math.random();
-                    });
-                    var dataRows = [];
-
-                    for (var i2 = headerRowIndex + 1; i2 < rawRows.length; i2++) {
-                        var rowArr = rawRows[i2];
-                        if (!rowArr || rowArr.length === 0 || rowArr.every(function (c) { return c === null || c === ""; })) continue;
-
-                        var rowObj = {};
-                        headers.forEach(function (header, index) {
-                            rowObj[header] = rowArr[index];
-                        });
-                        dataRows.push(rowObj);
-                    }
-
-                    if (dataRows.length > 0) {
-                        rawData[sheetName] = { headers: headers, rows: dataRows };
-                    }
-                }
-            } catch (err) {
-                console.error("Error parsing sheet " + sheetName + ":", err);
-            }
-
-            currentSheetIndex++;
-            parseNextSheet();
-        }, 30);
-    }
-
-    parseNextSheet();
-}
-
-// Data parser logic (reused both in Web Worker and Main Thread Fallback)
+// ---------------------------------------------------------------
+// Data helpers — used both by the main thread fallback AND
+// serialized into the Web Worker via .toString() when possible.
+// Keep them self-contained (no closures over window.*).
+// ---------------------------------------------------------------
 function getColumnNameByPattern(headers, patterns) {
     for (var h = 0; h < headers.length; h++) {
-        var lowerHeader = headers[h].toLowerCase();
+        var lower = headers[h].toLowerCase();
         for (var p = 0; p < patterns.length; p++) {
-            if (lowerHeader.indexOf(patterns[p]) !== -1) return headers[h];
+            if (lower.indexOf(patterns[p]) !== -1) return headers[h];
         }
     }
     return null;
@@ -449,35 +170,283 @@ function buildSearchIndex(structuredData, layers) {
     return index;
 }
 
+// ---------------------------------------------------------------
+// File upload handler — detects file:// and uses the correct path
+// ---------------------------------------------------------------
+function handleFile(file) {
+    if (!file.name.endsWith(".xlsx")) {
+        alert("Please upload a valid .xlsx file.");
+        return;
+    }
+
+    var localLoading = document.getElementById("local-loading");
+    var globalLoading = document.getElementById("global-loading-overlay");
+    if (localLoading) {
+        localLoading.style.display = "block";
+        localLoading.querySelector("span").innerText = "Reading Excel file...";
+    }
+    if (globalLoading) {
+        globalLoading.style.display = "flex";
+        globalLoading.querySelector("p").innerText = "Reading Excel file...";
+    }
+
+    var isLocal = (window.location.protocol === "file:");
+    console.log("Protocol:", window.location.protocol, "| Running", isLocal ? "LOCAL (file://)" : "SERVER", "mode");
+
+    var reader = new FileReader();
+    reader.onload = function (e) {
+        var arrayBuffer = e.target.result;
+
+        if (!isLocal) {
+            // HTTP/HTTPS mode — try Web Worker with embedded XLSX library
+            tryWorkerParsing(arrayBuffer, localLoading, globalLoading);
+        } else {
+            // file:// mode — XHR is blocked by CORS, use main-thread directly
+            parseMainThreadAsync(arrayBuffer, localLoading, globalLoading);
+        }
+    };
+    reader.readAsArrayBuffer(file);
+}
+
+// ---------------------------------------------------------------
+// Web Worker path (HTTP/HTTPS only)
+// ---------------------------------------------------------------
+function tryWorkerParsing(arrayBuffer, localLoading, globalLoading) {
+    if (localLoading) localLoading.querySelector("span").innerText = "Loading parser library...";
+    if (globalLoading) globalLoading.querySelector("p").innerText = "Loading parser library...";
+
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", "libs/xlsx.full.min.js", true);
+    xhr.onload = function () {
+        if (xhr.status >= 200 && xhr.status < 300) {
+            runWorker(arrayBuffer, xhr.responseText, localLoading, globalLoading);
+        } else {
+            console.warn("XLSX library fetch returned status " + xhr.status + ", falling back to main-thread.");
+            parseMainThreadAsync(arrayBuffer, localLoading, globalLoading);
+        }
+    };
+    xhr.onerror = function () {
+        console.warn("XLSX library fetch failed (network error), falling back to main-thread.");
+        parseMainThreadAsync(arrayBuffer, localLoading, globalLoading);
+    };
+    xhr.send();
+}
+
+function runWorker(arrayBuffer, xlsxCode, localLoading, globalLoading) {
+    if (localLoading) localLoading.querySelector("span").innerText = "Parsing workbook in background thread...";
+    if (globalLoading) globalLoading.querySelector("p").innerText = "Parsing & structuring data...";
+
+    // Build worker source: XLSX library + helper functions + message handler.
+    // The helpers are embedded via .toString() which is safe because they
+    // have no closures over window.* — they only use their own arguments.
+    var workerCode =
+        xlsxCode + "\n" +
+        getColumnNameByPattern.toString() + "\n" +
+        structureData.toString() + "\n" +
+        buildSearchIndex.toString() + "\n" +
+        "self.onmessage = function(e) {\n" +
+        "  var d = e.data;\n" +
+        "  try {\n" +
+        "    var wb = XLSX.read(d.arrayBuffer, { type: 'array' });\n" +
+        "    var raw = {};\n" +
+        "    wb.SheetNames.forEach(function(sn) {\n" +
+        "      var sh = wb.Sheets[sn];\n" +
+        "      var rr = XLSX.utils.sheet_to_json(sh, { header: 1, defval: null });\n" +
+        "      if (rr.length === 0) return;\n" +
+        "      var hi = 0;\n" +
+        "      for (var i = 0; i < Math.min(rr.length, 10); i++) {\n" +
+        "        if (rr[i] && rr[i].filter(function(c){return c!==null&&c!=='';}).length > 2) { hi = i; break; }\n" +
+        "      }\n" +
+        "      var hd = rr[hi].map(function(h){return h?h.toString().trim():'Col_'+Math.random();});\n" +
+        "      var dr = [];\n" +
+        "      for (var j = hi+1; j < rr.length; j++) {\n" +
+        "        var r = rr[j];\n" +
+        "        if (!r || r.length===0 || r.every(function(c){return c===null||c==='';})) continue;\n" +
+        "        var ro = {};\n" +
+        "        hd.forEach(function(h,k){ro[h]=r[k];});\n" +
+        "        dr.push(ro);\n" +
+        "      }\n" +
+        "      if (dr.length>0) raw[sn]={headers:hd,rows:dr};\n" +
+        "    });\n" +
+        "    var res = structureData(raw, d.layerPatterns, d.primaryEntityPatterns);\n" +
+        "    var idx = buildSearchIndex(res.structuredData, res.layers);\n" +
+        "    self.postMessage({status:'success',rawData:raw,structuredData:res.structuredData,layers:res.layers,stats:res.stats,searchIndex:idx});\n" +
+        "  } catch(err) {\n" +
+        "    self.postMessage({status:'error',error:err.message||String(err)});\n" +
+        "  }\n" +
+        "};\n";
+
+    var blob = new Blob([workerCode], { type: "application/javascript" });
+    var workerUrl = URL.createObjectURL(blob);
+    var worker = new Worker(workerUrl);
+
+    worker.onmessage = function (evt) {
+        var response = evt.data;
+        if (response.status === "success") {
+            window.appState.rawData = response.rawData;
+            window.appState.structuredData = response.structuredData;
+            window.appState.layers = response.layers;
+            window.appState.stats = response.stats;
+            window.appState.searchIndex = response.searchIndex;
+            window.appState.mindMapReady = false;
+            updateDashboardUI();
+        } else {
+            console.error("Worker parsing error:", response.error);
+            alert("Error parsing workbook: " + response.error);
+        }
+        finishLoading(localLoading, globalLoading);
+        worker.terminate();
+        URL.revokeObjectURL(workerUrl);
+    };
+
+    worker.onerror = function (err) {
+        console.warn("Worker error, falling back to main-thread:", err);
+        worker.terminate();
+        URL.revokeObjectURL(workerUrl);
+        parseMainThreadAsync(arrayBuffer, localLoading, globalLoading);
+    };
+
+    worker.postMessage({
+        arrayBuffer: arrayBuffer,
+        primaryEntityPatterns: window.appState.primaryEntityPatterns,
+        layerPatterns: window.appState.layerPatterns
+    });
+}
+
+// ---------------------------------------------------------------
+// Main-thread fallback (always works — XLSX is loaded via <script>)
+// ---------------------------------------------------------------
+function parseMainThreadAsync(arrayBuffer, localLoading, globalLoading) {
+    if (localLoading) localLoading.querySelector("span").innerText = "Parsing workbook...";
+    if (globalLoading) globalLoading.querySelector("p").innerText = "Parsing workbook...";
+
+    // Yield so the spinner paints before we block
+    setTimeout(function () {
+        try {
+            var data = new Uint8Array(arrayBuffer);
+            var workbook = XLSX.read(data, { type: "array" });
+            processWorkbookAsync(workbook, localLoading, globalLoading);
+        } catch (error) {
+            console.error("Error parsing workbook on main thread:", error);
+            alert("Error parsing Excel file: " + (error.message || String(error)));
+            finishLoading(localLoading, globalLoading);
+        }
+    }, 50);
+}
+
+// Sheet-by-sheet async processing to avoid blocking main thread
+function processWorkbookAsync(workbook, localLoading, globalLoading) {
+    var rawData = {};
+    var sheetNames = workbook.SheetNames;
+    var idx = 0;
+
+    function parseNext() {
+        if (idx >= sheetNames.length) {
+            // All sheets parsed — structure and index
+            if (localLoading) localLoading.querySelector("span").innerText = "Structuring data...";
+            if (globalLoading) globalLoading.querySelector("p").innerText = "Structuring data...";
+
+            setTimeout(function () {
+                try {
+                    var result = structureData(rawData, window.appState.layerPatterns, window.appState.primaryEntityPatterns);
+                    var searchIndex = buildSearchIndex(result.structuredData, result.layers);
+
+                    window.appState.rawData = rawData;
+                    window.appState.structuredData = result.structuredData;
+                    window.appState.layers = result.layers;
+                    window.appState.stats = result.stats;
+                    window.appState.searchIndex = searchIndex;
+                    window.appState.mindMapReady = false;
+
+                    updateDashboardUI();
+                } catch (error) {
+                    console.error("Error structuring data:", error);
+                    alert("Error structuring data: " + error.message);
+                } finally {
+                    finishLoading(localLoading, globalLoading);
+                }
+            }, 50);
+            return;
+        }
+
+        var sn = sheetNames[idx];
+        if (localLoading) localLoading.querySelector("span").innerText = "Parsing sheet: " + sn + " (" + (idx + 1) + "/" + sheetNames.length + ")...";
+        if (globalLoading) globalLoading.querySelector("p").innerText = "Parsing sheet: " + sn + " (" + (idx + 1) + "/" + sheetNames.length + ")...";
+
+        setTimeout(function () {
+            try {
+                var sheet = workbook.Sheets[sn];
+                var rawRows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null });
+
+                if (rawRows.length > 0) {
+                    var headerRowIndex = 0;
+                    for (var i = 0; i < Math.min(rawRows.length, 10); i++) {
+                        var row = rawRows[i];
+                        if (row && row.filter(function (c) { return c !== null && c !== ""; }).length > 2) {
+                            headerRowIndex = i;
+                            break;
+                        }
+                    }
+
+                    var headers = rawRows[headerRowIndex].map(function (h) {
+                        return h ? h.toString().trim() : "Column_" + Math.random();
+                    });
+                    var dataRows = [];
+
+                    for (var j = headerRowIndex + 1; j < rawRows.length; j++) {
+                        var rowArr = rawRows[j];
+                        if (!rowArr || rowArr.length === 0 || rowArr.every(function (c) { return c === null || c === ""; })) continue;
+                        var rowObj = {};
+                        headers.forEach(function (header, k) {
+                            rowObj[header] = rowArr[k];
+                        });
+                        dataRows.push(rowObj);
+                    }
+
+                    if (dataRows.length > 0) {
+                        rawData[sn] = { headers: headers, rows: dataRows };
+                    }
+                }
+            } catch (err) {
+                console.error("Error parsing sheet " + sn + ":", err);
+            }
+            idx++;
+            parseNext();
+        }, 30);
+    }
+
+    parseNext();
+}
+
+function finishLoading(localLoading, globalLoading) {
+    if (localLoading) localLoading.style.display = "none";
+    if (globalLoading) globalLoading.style.display = "none";
+}
+
+// ---------------------------------------------------------------
+// UI update
+// ---------------------------------------------------------------
 function updateDashboardUI() {
     document.getElementById("upload-overlay").classList.add("hidden");
     document.getElementById("dashboard").style.display = "flex";
 
-    // Hide loaders
-    var localLoading = document.getElementById("local-loading");
-    var globalLoading = document.getElementById("global-loading-overlay");
-    if (localLoading) localLoading.style.display = "none";
-    if (globalLoading) globalLoading.style.display = "none";
+    finishLoading(document.getElementById("local-loading"), document.getElementById("global-loading-overlay"));
 
-    // Show Export button
     var exportBtn = document.getElementById("export-word-btn");
     if (exportBtn) exportBtn.style.display = "inline-block";
 
-    // Update stats
     document.getElementById("stat-layers").innerText = window.appState.stats.layers;
     document.getElementById("stat-entities").innerText = window.appState.stats.entities;
     document.getElementById("stat-txns").innerText = window.appState.stats.transactions;
 
-    // Format amount with commas
     var formatter = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     document.getElementById("stat-amount").innerText = formatter.format(window.appState.stats.totalAmount);
 
-    // Initialize Table View
     if (window.renderSidebarAndTables) {
         window.renderSidebarAndTables();
     }
 
-    // Reset flag so next tab-switch triggers init
+    // Reset mind map — deferred until user clicks the tab
     window.appState.mindMapReady = false;
     if (window.appState.cy) {
         window.appState.cy.destroy();
